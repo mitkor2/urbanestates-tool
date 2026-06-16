@@ -9,7 +9,7 @@
   <style>
     :root { color-scheme:light; --bg:#f8f4ec; --surface:#fffaf3; --surface-2:#f3ede3; --header:#f7f3ec; --text:#221815; --muted:#8d96a3; --border:#e4dbcf; --accent:#7d1026; --shadow:rgba(69,38,26,0.08); }
     *, *::before, *::after { box-sizing:border-box; }
-    body { font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0; background:var(--bg); color:var(--text); }
+    body { font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0; background:var(--bg); color:var(--text); overflow-x:hidden; }
     header { background:var(--header); border-bottom:1px solid var(--border); box-shadow:0 2px 10px var(--shadow); }
     .header-inner { max-width:1100px; margin:0 auto; padding:12px 20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
     .header-inner h1 { margin:0; font-size:18px; font-weight:700; color:var(--accent); display:flex; align-items:center; gap:10px; }
@@ -98,6 +98,12 @@
     button.secondary { background:#fff; color:var(--accent); border-color:var(--border); box-shadow:none; }
     button.secondary:hover { background:var(--surface-2); border-color:var(--accent); }
     #loadingMsg { font-size:13px; color:var(--muted); font-style:italic; display:none; }
+    .img-slot-wrap { flex:1; display:flex; flex-direction:column; gap:3px; min-width:0; }
+    .img-url-input { font-size:11px; padding:4px 7px; border:1px solid var(--border); border-radius:6px; color:var(--text); background:#fff; width:100%; font-family:inherit; }
+    .img-url-input:focus { outline:none; border-color:var(--accent); }
+    .img-url-input::placeholder { color:var(--muted); }
+    #fileSizeNote { font-size:11px; color:var(--muted); }
+    #fileSizeNote.warn { color:#c05000; font-weight:600; }
 
     footer { padding:14px 20px; color:#7e756d; font-size:12px; text-align:center; border-top:1px solid var(--border); background:var(--header); margin-top:24px; }
     footer a { color:var(--accent); text-decoration:none; }
@@ -111,7 +117,7 @@
     <nav class="header-nav" id="headerNav">
       <a href="index.html" class="nav-link" data-i18n="nav.watermark">Watermark Tool</a>
       <a href="collage.html" class="nav-link" data-i18n="nav.collage">Collage</a>
-      <a href="email-campaigns.html" class="nav-link active" data-i18n="nav.email">Email Campaigns</a>
+      <a href="gif-maker.html" class="nav-link" data-i18n="nav.gif">GIF Maker</a>
       <div class="lang-switcher">
         <button class="lang-btn" data-lang="en">EN</button>
         <button class="lang-btn" data-lang="bg">BG</button>
@@ -153,7 +159,9 @@
       <button class="secondary" onclick="newSession()" data-i18n="ec.newBtn" title="Reset to defaults">New</button>
       <span id="tplLabel"></span>
       <button onclick="downloadHtml()" data-i18n="ec.downloadBtn">&#11015; Download HTML</button>
+      <span id="fileSizeNote"></span>
     </div>
+    <p style="margin:0 0 10px;font-size:11px;color:#c05000;background:#fff8f0;border:1px solid #f4d0a0;border-radius:8px;padding:7px 10px"><b>Image tip:</b> Uploaded photos are embedded as data (base64) — this makes the HTML large. Gmail clips emails over <b>102 KB</b>, cutting off content. To avoid clipping and display images reliably in all email clients, paste hosted image URLs (from your website, Google Drive share link, etc.) into the URL fields below each photo slot instead of uploading files.</p>
     <div class="editor-layout">
       <!-- Left: form -->
       <div class="editor-panel" id="editorForm"></div>
@@ -183,12 +191,19 @@
 document.getElementById('navToggle').addEventListener('click', function() {
   document.getElementById('headerNav').classList.toggle('open');
 });
+document.addEventListener('click', function(e) {
+  const nav = document.getElementById('headerNav');
+  if (nav.classList.contains('open') && !nav.contains(e.target) && !document.getElementById('navToggle').contains(e.target)) {
+    nav.classList.remove('open');
+  }
+});
 
 // ── State ──────────────────────────────────────────────────────
 let rawHtml = '';           // original template HTML string
 let templateDom = null;     // parsed DOM (never mutated)
 let originalImgSrcs = [];   // original mceImage srcs in order
-let imageUploads = {};      // slot index -> data URL
+let imageUploads = {};      // slot index -> compressed data URL from file upload
+let imageUrls    = {};      // slot index -> hosted URL typed by user (takes priority)
 let currentTpl = null;
 let extraSections = [];     // user-added property sections
 let _extraId = 0;           // counter for unique extra section IDs
@@ -300,8 +315,8 @@ async function loadTemplate(which) {
   }
 
   const url = which === 'pepa'
-    ? 'Pepa%20Petrova%20Advisory.html'
-    : 'Urban%20Estate%20.html';
+    ? 'pepa-petrova-advisory.html'
+    : 'urban-estate.html';
 
   rawHtml = await fetch(url).then(r => r.text());
   templateDom = new DOMParser().parseFromString(rawHtml, 'text/html');
@@ -314,6 +329,7 @@ async function loadTemplate(which) {
   });
 
   imageUploads = {};
+  imageUrls    = {};
   buildForm();
 
   document.getElementById('pickerSection').style.display = 'none';
@@ -341,6 +357,9 @@ function buildForm() {
       const row = document.createElement('div');
       row.className = 'img-slots';
       sec.imgSlots.forEach(slot => {
+        const wrap = document.createElement('div');
+        wrap.className = 'img-slot-wrap';
+
         const el = document.createElement('div');
         el.className = 'img-slot';
         el.id = `slot_${slot.idx}`;
@@ -353,7 +372,31 @@ function buildForm() {
         if (originalImgSrcs[slot.idx]) el.classList.add('has-image');
         el.addEventListener('click', () => document.getElementById(`slotFile_${slot.idx}`).click());
         el.querySelector('input').addEventListener('change', e => handleImageUpload(e, slot.idx));
-        row.appendChild(el);
+
+        const urlInp = document.createElement('input');
+        urlInp.type = 'url';
+        urlInp.id = `slotUrl_${slot.idx}`;
+        urlInp.className = 'img-url-input';
+        urlInp.placeholder = 'Paste image URL (Mailchimp)';
+        urlInp.value = imageUrls[slot.idx] || '';
+        urlInp.addEventListener('input', e => {
+          const url = e.target.value.trim();
+          imageUrls[slot.idx] = url || undefined;
+          const imgEl  = document.getElementById(`slotImg_${slot.idx}`);
+          const slotEl = document.getElementById(`slot_${slot.idx}`);
+          if (url) {
+            imgEl.src = url; imgEl.style.display = 'block'; slotEl.classList.add('has-image');
+          } else if (imageUploads[slot.idx]) {
+            imgEl.src = imageUploads[slot.idx];
+          } else {
+            imgEl.style.display = 'none'; slotEl.classList.remove('has-image');
+          }
+          debouncedUpdate();
+        });
+
+        wrap.appendChild(el);
+        wrap.appendChild(urlInp);
+        row.appendChild(wrap);
       });
       div.appendChild(row);
     }
@@ -403,19 +446,80 @@ function getDefaultValue(f) {
   return '';
 }
 
+// ── Image compression ─────────────────────────────────────────
+// Produce a data URL ≤ targetBytes so the final email stays small enough that
+// Mailchimp embeds each <img> reliably (huge base64 data URLs cause Mailchimp
+// to escape the whole tag) and Gmail doesn't clip at 102 KB.
+// Strategy: resize to maxPx, then step quality down, then shrink dimensions.
+function compressImage(dataUrl, opts, cb) {
+  const {
+    maxPx       = 480,
+    quality     = 0.7,
+    targetBytes = 35 * 1024,
+    minQuality  = 0.32,
+    minPx       = 220,
+    allowAlpha  = false,  // true only for logos that need transparency
+  } = opts || {};
+
+  const img = new Image();
+  img.onload = function() {
+    let w = img.width, h = img.height;
+    if (w > maxPx || h > maxPx) {
+      if (w >= h) { h = Math.round(h * maxPx / w); w = maxPx; }
+      else        { w = Math.round(w * maxPx / h); h = maxPx; }
+    }
+    const isPng  = dataUrl.startsWith('data:image/png');
+    const usePng = isPng && allowAlpha;
+
+    let q = quality;
+    let out = '';
+    function encode() {
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      if (!usePng) {
+        // Flatten any alpha to white so JPEG doesn't render black halos.
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+      }
+      ctx.drawImage(img, 0, 0, w, h);
+      out = usePng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', q);
+    }
+    encode();
+    // 1) Step quality down (JPEG only)
+    while (!usePng && out.length > targetBytes && q > minQuality + 0.001) {
+      q = Math.max(minQuality, q - 0.08);
+      encode();
+    }
+    // 2) Shrink dimensions if still above budget
+    while (out.length > targetBytes && Math.max(w, h) > minPx) {
+      w = Math.max(1, Math.round(w * 0.85));
+      h = Math.max(1, Math.round(h * 0.85));
+      encode();
+    }
+    cb(out);
+  };
+  img.onerror = () => cb(dataUrl);
+  img.src = dataUrl;
+}
+
 // ── Image upload ──────────────────────────────────────────────
 function handleImageUpload(e, idx) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = ev => {
-    imageUploads[idx] = ev.target.result;
-    const slotEl = document.getElementById(`slot_${idx}`);
-    const imgEl = document.getElementById(`slotImg_${idx}`);
-    imgEl.src = ev.target.result;
-    imgEl.style.display = 'block';
-    slotEl.classList.add('has-image');
-    debouncedUpdate();
+    compressImage(ev.target.result, { maxPx: 360, quality: 0.7, targetBytes: 20 * 1024 }, dataUrl => {
+      imageUploads[idx] = dataUrl;
+      const slotEl = document.getElementById(`slot_${idx}`);
+      const imgEl  = document.getElementById(`slotImg_${idx}`);
+      if (!imageUrls[idx]) { // only update preview if no hosted URL is set
+        imgEl.src = dataUrl;
+        imgEl.style.display = 'block';
+        slotEl.classList.add('has-image');
+      }
+      debouncedUpdate();
+    });
   };
   reader.readAsDataURL(file);
   e.target.value = '';
@@ -558,29 +662,67 @@ function applyEdits(dom) {
     if (tEl && tEl.value) injectCtaButton(dom, tEl.value, uEl ? uEl.value : '#');
   }
 
-  // Images — replace mceImage srcs
+  // Images — replace mceImage srcs (hosted URL takes priority over data URL)
   const allImgs = [...dom.querySelectorAll('img.mceImage')];
-  // Group by original src
   const srcToImgs = {};
   allImgs.forEach(img => {
     const k = img.src;
     if (!srcToImgs[k]) srcToImgs[k] = [];
     srcToImgs[k].push(img);
   });
-  Object.entries(imageUploads).forEach(([idx, dataUrl]) => {
-    const origSrc = originalImgSrcs[idx];
-    if (origSrc && srcToImgs[origSrc]) {
-      srcToImgs[origSrc].forEach(img => { img.src = dataUrl; });
+  for (let i = 0; i < originalImgSrcs.length; i++) {
+    const resolved = imageUrls[i] || imageUploads[i];
+    const origSrc  = originalImgSrcs[i];
+    if (resolved && origSrc && srcToImgs[origSrc]) {
+      srcToImgs[origSrc].forEach(img => { img.src = resolved; });
     }
-  });
+  }
 }
 
 // ── Download ──────────────────────────────────────────────────
+function minifyEmailHtml(html) {
+  // Remove only plain HTML comments that contain no special markers.
+  // Preserve ALL of these patterns:
+  //   <!--[if ...]>     MSO/Outlook conditional open
+  //   <!--<![...        Conditional closing markers  (e.g. <!--<![endif]-->)
+  //   <!--*|...|*-->    Mailchimp merge-tag conditionals
+  //   <!--MCE_...-->    Mailchimp tracking/placeholder comments
+  //   <!---->           Empty comments
+  //   <!-->             The embedded ">" marker inside <!--[if !mso]><!-->
+  //                     — without this guard the regex picks up the inner <!--
+  //                       and swallows entire image blocks up to the next -->
+  html = html.replace(
+    /<!--(?!\[if\b)(?!<!\[)(?!\*\|)(?!MCE_)(?!>)(?!-->)[\s\S]*?-->/g,
+    ''
+  );
+  // Collapse whitespace-only gaps between tags
+  html = html.replace(/>\s+</g, '><');
+  return html.trim();
+}
+
+function _showFileSize(html) {
+  const kb  = Math.round(html.length / 1024);
+  const el  = document.getElementById('fileSizeNote');
+  if (!el) return;
+  if (kb > 102) {
+    el.className   = 'warn';
+    el.textContent = `~${kb} KB — Gmail clips emails over 102 KB! Use hosted image URLs (paste in the URL fields) so images don't bloat the HTML.`;
+  } else if (kb > 80) {
+    el.className   = 'warn';
+    el.textContent = `~${kb} KB — approaching Gmail's 102 KB clip limit. Consider using hosted image URLs.`;
+  } else {
+    el.className   = '';
+    el.textContent = `~${kb} KB`;
+  }
+}
+
 function downloadHtml() {
   if (!templateDom && currentTpl !== 'custom') return;
   if (currentTpl === 'custom') {
+    const html = buildCustomEmailHtml();
+    _showFileSize(html);
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([buildCustomEmailHtml()], { type:'text/html' }));
+    a.href = URL.createObjectURL(new Blob([html], { type:'text/html' }));
     a.download = 'Custom Email.html';
     a.click();
     return;
@@ -591,11 +733,18 @@ function downloadHtml() {
   // Also replace in the raw string so MSO conditional comments are updated
   let html = '<!DOCTYPE html>' + clone.documentElement.outerHTML;
 
-  // For images: raw string replacement of original srcs with data URLs
-  Object.entries(imageUploads).forEach(([idx, dataUrl]) => {
-    const origSrc = originalImgSrcs[idx];
-    if (origSrc) html = html.split(origSrc).join(dataUrl);
-  });
+  // Replace original image srcs — hosted URL takes priority over compressed data URL
+  for (let i = 0; i < originalImgSrcs.length; i++) {
+    const resolved = imageUrls[i] || imageUploads[i];
+    if (resolved && originalImgSrcs[i]) {
+      html = html.split(originalImgSrcs[i]).join(resolved);
+    }
+  }
+
+  // Minify: strip non-MSO comments and collapse whitespace to reduce file size
+  html = minifyEmailHtml(html);
+
+  _showFileSize(html);
 
   const fname = currentTpl === 'pepa'
     ? 'Pepa Petrova Advisory - edited.html'
@@ -616,6 +765,10 @@ function backToPicker() {
   extraSections = [];
   _extraId = 0;
   customConfig = {};
+  imageUploads = {};
+  imageUrls    = {};
+  const sizeEl = document.getElementById('fileSizeNote');
+  if (sizeEl) { sizeEl.textContent = ''; sizeEl.className = ''; }
 }
 
 function esc(s) {
@@ -688,11 +841,13 @@ function buildCustomForm() {
           const file = e.target.files[0]; if (!file) return;
           const reader = new FileReader();
           reader.onload = ev => {
-            c.logoDataUrl = ev.target.result;
-            document.getElementById('cf_logoImg').src = ev.target.result;
-            document.getElementById('cf_logoImg').style.display = 'block';
-            document.getElementById('cf_logoSlot').classList.add('has-image');
-            debouncedUpdate();
+            compressImage(ev.target.result, { maxPx: 380, quality: 0.9, targetBytes: 22 * 1024, allowAlpha: true, minPx: 160 }, dataUrl => {
+              c.logoDataUrl = dataUrl;
+              document.getElementById('cf_logoImg').src = dataUrl;
+              document.getElementById('cf_logoImg').style.display = 'block';
+              document.getElementById('cf_logoSlot').classList.add('has-image');
+              debouncedUpdate();
+            });
           };
           reader.readAsDataURL(file); e.target.value = '';
         });
@@ -887,20 +1042,49 @@ function buildExtraSecFormEl(sec) {
   div.appendChild(hdr);
 
   // Image slots
+  if (!sec.imgUrls) sec.imgUrls = {};
   if (layout.slots.length) {
     const row = document.createElement('div');
     row.className = 'img-slots';
     layout.slots.forEach(slot => {
+      const wrap = document.createElement('div');
+      wrap.className = 'img-slot-wrap';
+
+      const resolvedSrc = sec.imgUrls[slot.key] || sec.imgUploads[slot.key] || '';
       const slotEl = document.createElement('div');
-      slotEl.className = 'img-slot' + (sec.imgUploads[slot.key] ? ' has-image' : '');
+      slotEl.className = 'img-slot' + (resolvedSrc ? ' has-image' : '');
       slotEl.id = `xslot_${sec.id}_${slot.key}`;
       slotEl.innerHTML = `
-        <img id="xslotImg_${sec.id}_${slot.key}" src="${sec.imgUploads[slot.key]||''}" style="${sec.imgUploads[slot.key]?'':'display:none'}">
+        <img id="xslotImg_${sec.id}_${slot.key}" src="${resolvedSrc}" style="${resolvedSrc?'':'display:none'}">
         <div class="slot-label"><span>📷</span>${slot.label}<br><small>${slot.hint}</small></div>
         <input type="file" id="xslotFile_${sec.id}_${slot.key}" accept="image/*">`;
       slotEl.addEventListener('click', () => document.getElementById(`xslotFile_${sec.id}_${slot.key}`).click());
       slotEl.querySelector('input').addEventListener('change', e => handleExtraImageUpload(e, sec.id, slot.key));
-      row.appendChild(slotEl);
+
+      const urlInp = document.createElement('input');
+      urlInp.type = 'url';
+      urlInp.id = `xslotUrl_${sec.id}_${slot.key}`;
+      urlInp.className = 'img-url-input';
+      urlInp.placeholder = 'Paste image URL (Mailchimp)';
+      urlInp.value = sec.imgUrls[slot.key] || '';
+      urlInp.addEventListener('input', e => {
+        const url = e.target.value.trim();
+        sec.imgUrls[slot.key] = url || undefined;
+        const imgEl  = document.getElementById(`xslotImg_${sec.id}_${slot.key}`);
+        const sEl    = document.getElementById(`xslot_${sec.id}_${slot.key}`);
+        if (url) {
+          imgEl.src = url; imgEl.style.display = 'block'; sEl.classList.add('has-image');
+        } else if (sec.imgUploads[slot.key]) {
+          imgEl.src = sec.imgUploads[slot.key];
+        } else {
+          imgEl.style.display = 'none'; sEl.classList.remove('has-image');
+        }
+        debouncedUpdate();
+      });
+
+      wrap.appendChild(slotEl);
+      wrap.appendChild(urlInp);
+      row.appendChild(wrap);
     });
     div.appendChild(row);
   }
@@ -962,12 +1146,16 @@ function handleExtraImageUpload(e, secId, slotKey) {
   if (!sec) return;
   const reader = new FileReader();
   reader.onload = ev => {
-    sec.imgUploads[slotKey] = ev.target.result;
-    const imgEl = document.getElementById(`xslotImg_${secId}_${slotKey}`);
-    const slotEl = document.getElementById(`xslot_${secId}_${slotKey}`);
-    if (imgEl) { imgEl.src = ev.target.result; imgEl.style.display = 'block'; }
-    if (slotEl) slotEl.classList.add('has-image');
-    debouncedUpdate();
+    compressImage(ev.target.result, { maxPx: 360, quality: 0.7, targetBytes: 20 * 1024 }, dataUrl => {
+      sec.imgUploads[slotKey] = dataUrl;
+      const imgEl  = document.getElementById(`xslotImg_${secId}_${slotKey}`);
+      const slotEl = document.getElementById(`xslot_${secId}_${slotKey}`);
+      if (!sec.imgUrls?.[slotKey]) { // only update preview if no hosted URL set
+        if (imgEl) { imgEl.src = dataUrl; imgEl.style.display = 'block'; }
+        if (slotEl) slotEl.classList.add('has-image');
+      }
+      debouncedUpdate();
+    });
   };
   reader.readAsDataURL(file);
   e.target.value = '';
@@ -975,7 +1163,9 @@ function handleExtraImageUpload(e, secId, slotKey) {
 
 function buildPropertyBlockHtml(sec, accentOverride) {
   const f = sec.fields;
-  const imgs = sec.imgUploads;
+  // Resolve image: hosted URL takes priority over uploaded data URL
+  function img(key) { return (sec.imgUrls && sec.imgUrls[key]) || (sec.imgUploads && sec.imgUploads[key]) || null; }
+  const imgs = { hero: img('hero'), sideA: img('sideA'), sideB: img('sideB') };
   const accent = accentOverride || (currentTpl === 'pepa' ? '#d4ad51' : '#7d1026');
   const btnTxt = accent === '#d4ad51' ? '#222222' : '#ffffff';
   const font   = "'Helvetica Neue',Helvetica,Arial,Verdana,sans-serif";

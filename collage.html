@@ -14,7 +14,7 @@
       --border: #e4dbcf; --accent: #7d1026; --accent-2: #5f0b1c;
       --accent-soft: #efe2cf; --shadow: rgba(69,38,26,0.08);
     }
-    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0; background:var(--bg); color:var(--text); }
+    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0; background:var(--bg); color:var(--text); overflow-x:hidden; }
 
     header { background:var(--header); border-bottom:1px solid var(--border); box-shadow:0 2px 10px var(--shadow); }
     .header-inner { max-width:1100px; margin:0 auto; padding:12px 20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
@@ -171,7 +171,7 @@
     <nav class="header-nav" id="headerNav">
       <a href="index.html" class="nav-link" data-i18n="nav.watermark">Watermark Tool</a>
       <a href="collage.html" class="nav-link active" data-i18n="nav.collage">Collage</a>
-      <a href="email-campaigns.html" class="nav-link" data-i18n="nav.email">Email Campaigns</a>
+      <a href="gif-maker.html" class="nav-link" data-i18n="nav.gif">GIF Maker</a>
       <div class="lang-switcher">
         <button class="lang-btn" data-lang="en">EN</button>
         <button class="lang-btn" data-lang="bg">BG</button>
@@ -943,6 +943,12 @@ document.getElementById('dlPngBtn').addEventListener('click', () => {
 });
 document.getElementById('navToggle').addEventListener('click', () => {
   document.getElementById('headerNav').classList.toggle('open');
+});
+document.addEventListener('click', function(e) {
+  const nav = document.getElementById('headerNav');
+  if (nav.classList.contains('open') && !nav.contains(e.target) && !document.getElementById('navToggle').contains(e.target)) {
+    nav.classList.remove('open');
+  }
 });
 
 // ── Border controls ────────────────────────────────────────────────────
